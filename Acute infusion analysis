@@ -1,0 +1,81 @@
+## Acute infusion data analysis script
+## Rae Herman, adapted from Riley Merkel
+#-----------------------------------------------------------------------------#
+
+
+#load libraries
+library(ggplot2)
+library(tidyverse)
+library(Thermimage)
+library (dplyr)
+
+#load raw data from csv files
+Ca2<-read.csv('raw FP signal data')
+
+events <- read.csv('infusion timestamp')
+
+#raw signal and control traces graph 
+ggplot()+ 
+ geom_line(aes(x = Ca2$TimeStamp, y=Ca2$Signal ))+
+  geom_line(aes(x = Ca2$TimeStamp, y=Ca2$Control, colour='red'))
+
+
+#R regression formula is lm(y~x, data = dataframe)
+#y is the signal channel, x is the control channel ---> lm is now our data table with the regression coefficient results 
+lm<- lm(Signal ~ Control, data=Ca2)
+
+b1 <- lm$coefficients[2]
+b0 <- lm$coefficients[1]
+
+fitted<-Ca2%>%
+  mutate(predicted_signal=  (b1 * Control) + b0)
+
+df_f <- fitted %>%
+  mutate(df=(Signal- predicted_signal)/predicted_signal)
+
+#parse out whatever your event of interest is... in this case we are interested in infusions
+
+infusions <- events %>% filter(Event == "infusion event")
+infusions <- infusions$Onset
+
+
+#loop through each infusion value, z-score data and put into result_list
+result_list <- list()
+
+for(infusion_value in infusions) {
+
+#here you set your time parameters 
+ 
+t <- df_f %>% filter(infusion_value - 20 <=TimeStamp, infusion_value + 420 >=TimeStamp)
+g <- df_f %>% filter(infusion_value - 10 <=TimeStamp, infusion_value - 5 >= TimeStamp) #baseline time parameters ( -10 to -5s baseline for GRABda)
+s <- mean(g$df) 
+r <- sd(g$df)
+
+t <- t %>% mutate(z_score=(df - ( s))/  (r) ) %>% 
+  mutate(time = (TimeStamp- infusion_value))
+
+#downsampling
+z_score <- meanEveryN(t$z_score,300)
+time <- meanEveryN(t$time,300)
+binned_trace <- data.frame(time, z_score)
+
+result_list[[as.character(infusion_value)]] <- binned_trace
+}
+
+print(class(result_list))
+#rounding time values for matching
+for (i in seq_along(result_list)) {
+  # Round the 'time' column to one decimal point
+  result_list[[i]]$time <- round(result_list[[i]]$time, 1)
+}
+
+#combining data table and exporting to csv
+
+combined_data <- Reduce(function(x, y) full_join(x, y, by = "time"), result_list)
+colnames(combined_data) <- c("time", paste0("z_score_", 1:length(result_list)))
+
+write.csv(combined_data, "pathname/document_name.csv", row.names=FALSE)
+
+
+
+
